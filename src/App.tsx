@@ -1,1352 +1,485 @@
-import { useMemo, useState } from "react";
-import {
-  Search,
-  Plus,
-  Star,
-  Copy,
-  Check,
-  BookOpen,
-  Code2,
-  PenLine,
-  Sparkles,
-  Briefcase,
-  ArrowUpRight,
-  X,
-  WandSparkles,
-  Grid2X2,
-  Heart,
-  Sun,
-  Moon,
-} from "lucide-react";
-import "./App.css";
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+import { ArrowRight, BookOpen, Brain, Briefcase, Code, Copy, FileText, GraduationCap, LayoutGrid, Menu, Moon, PenLine, Plus, Search, Sparkles, Star, Sun, User, X } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import './App.css'
+import { Logo, Mascot } from './Brand'
 
-type Category = "Study" | "Coding" | "Writing" | "AI" | "Career";
+type Cat = 'Study' | 'Coding' | 'Writing' | 'AI' | 'Career'
+interface Prompt { id: string; title: string; content: string; category: Cat; tags: string[]; fav: boolean }
+interface Template { id: string; title: string; description: string; category: Cat; body: string }
+type View = 'all' | 'fav' | 'templates' | Cat
+type Modal =
+  | { t: 'new' } | { t: 'detail'; id: string } | { t: 'improve'; text: string } | { t: 'dna'; text: string }
+  | { t: 'account' } | { t: 'tpl'; id: string } | { t: 'guide' } | null
+interface ToastState { id: number; msg: string; leaving: boolean }
 
-type Prompt = {
-  id: number;
-  title: string;
-  description: string;
-  prompt: string;
-  category: Category;
-  tags: string[];
-  favorite: boolean;
-};
+const CATS: Cat[] = ['Study', 'Coding', 'Writing', 'AI', 'Career']
+const ICONS: Record<Cat, LucideIcon> = { Study: GraduationCap, Coding: Code, Writing: PenLine, AI: Brain, Career: Briefcase }
+const TONE: Record<Cat, string> = { Study: 'yellow', Coding: 'mint', Writing: 'peach', AI: 'lav', Career: 'blue' }
+const KEY = 'pbn.prompts', THEME_KEY = 'pbn.theme', NAME_KEY = 'pbn.name'
+const TOAST_MS = 1900, TOAST_EXIT_MS = 220
+const IS_MAC = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
 
-const initialPrompts: Prompt[] = [
-  {
-    id: 1,
-    title: "Explain a complex topic simply",
-    description:
-      "Understand difficult concepts in simple language with useful examples.",
-    prompt:
-      "Explain [TOPIC] as if I am a complete beginner. Use simple language, real-world analogies, and practical examples. Break the explanation into small sections and finish with a short summary and 5 key points to remember.",
-    category: "Study",
-    tags: ["Beginner", "Learning"],
-    favorite: true,
-  },
-  {
-    id: 2,
-    title: "Debug my code",
-    description:
-      "Find bugs, explain why they happen, and provide a corrected solution.",
-    prompt:
-      "Analyze the following code carefully. Identify the bug, explain why it happens, provide the corrected version, and suggest best practices to prevent similar issues.",
-    category: "Coding",
-    tags: ["Debugging", "Programming"],
-    favorite: true,
-  },
-  {
-    id: 3,
-    title: "Improve my writing",
-    description:
-      "Make your writing clearer, more professional, and engaging.",
-    prompt:
-      "Rewrite the following text to make it clearer, more professional, concise, and engaging while preserving my original meaning and tone.",
-    category: "Writing",
-    tags: ["Editing", "Professional"],
-    favorite: false,
-  },
-  {
-    id: 4,
-    title: "Create a learning roadmap",
-    description:
-      "Build a structured learning path from beginner to advanced level.",
-    prompt:
-      "Create a structured learning roadmap for [SKILL]. Assume I am a beginner. Divide it into stages, explain what to learn at each stage, recommend practical projects, and provide a realistic weekly plan.",
-    category: "AI",
-    tags: ["Roadmap", "Learning"],
-    favorite: true,
-  },
-  {
-    id: 5,
-    title: "Prepare for an interview",
-    description:
-      "Generate realistic interview questions with strong answer guidance.",
-    prompt:
-      "Act as an experienced interviewer for [ROLE]. Ask me realistic interview questions one at a time. After each answer, evaluate it, explain how I can improve, and provide an example of a strong answer.",
-    category: "Career",
-    tags: ["Interview", "Career"],
-    favorite: false,
-  },
-  {
-    id: 6,
-    title: "Summarize study material",
-    description:
-      "Turn long notes into concise revision-friendly material.",
-    prompt:
-      "Summarize the following study material into clear revision notes. Highlight important concepts, definitions, formulas, examples, and likely exam points. Finish with 10 quick revision questions.",
-    category: "Study",
-    tags: ["Notes", "Revision"],
-    favorite: false,
-  },
-];
+const DEFAULTS: Prompt[] = [
+  { id: 'd1', title: 'Explain Machine Learning Simply', category: 'Study', tags: ['ml', 'beginner'], fav: true, content: 'Explain machine learning to a first-year engineering student with no prior experience. Define the core idea, describe how a model learns from data, give 2 everyday examples, and end with a 5-point bullet summary. Keep it under 300 words and avoid heavy math.' },
+  { id: 'd2', title: 'Generate Clean Python Code', category: 'Coding', tags: ['python', 'clean-code'], fav: false, content: 'Write a Python function that reads a CSV file and returns the average of a numeric column. Use type hints, handle missing files and empty values, add a short docstring, and include one usage example. Do not use external libraries.' },
+  { id: 'd3', title: 'Improve My Resume', category: 'Career', tags: ['resume', 'internship'], fav: false, content: 'Review my resume bullet points for a software engineering internship application. Rewrite each bullet to start with a strong action verb and show measurable impact. Return a before and after table and list 3 further improvements.' },
+  { id: 'd4', title: 'Generate YouTube Ideas', category: 'Writing', tags: ['youtube', 'ideas'], fav: true, content: 'Suggest 10 video ideas for a YouTube channel about strange and fascinating facts from around the world. For each idea give a catchy title, a one-line hook, and the visuals needed. Avoid topics that are already overused.' },
+  { id: 'd5', title: 'Summarize a Research Paper', category: 'AI', tags: ['research', 'summary'], fav: false, content: 'Summarize the research paper below for a final-year student. Cover the problem, method, results and limitations in separate sections, explain difficult terms simply, and suggest 3 follow-up questions.' },
+  { id: 'd6', title: 'Create a DSA Study Plan', category: 'Study', tags: ['dsa', 'planning'], fav: false, content: 'Create an 8-week study plan for data structures and algorithms for a student who can study 2 hours per day. List weekly topics, 3 practice problems per topic, and a revision day every week. Present it as a table.' },
+  { id: 'd7', title: "Explain a Complex Topic Like I'm a Beginner", category: 'Study', tags: ['explain', 'simple'], fav: false, content: 'Explain [topic] as if I am a complete beginner. Use plain language, one analogy from daily life, a short step-by-step breakdown, and finish with 3 questions I can use to test my understanding.' },
+  { id: 'd8', title: 'Generate Interview Questions', category: 'Career', tags: ['interview', 'practice'], fav: false, content: 'Generate 10 interview questions for a junior frontend developer role. Include 4 technical, 3 behavioral and 3 problem-solving questions. For each, add what a strong answer should include in one sentence.' },
+]
 
-const categoryIcons = {
-  Study: BookOpen,
-  Coding: Code2,
-  Writing: PenLine,
-  AI: Sparkles,
-  Career: Briefcase,
-};
+const TEMPLATES: Template[] = [
+  { id: 't1', title: 'Study Notes Generator', category: 'Study', description: 'Turn any topic into structured revision notes.', body: 'You are a helpful tutor.\n\nExplain {{TOPIC}} for a {{AUDIENCE}} in a {{STYLE}} style.\n\nInclude:\n- simple explanation\n- key concepts\n- examples\n- common mistakes' },
+  { id: 't2', title: 'Code Reviewer', category: 'Coding', description: 'Get a careful review of your code with fixes.', body: 'Review the following {{LANGUAGE}} code for bugs, readability and performance.\n\n{{CODE}}\n\nList problems by severity, explain each briefly, and show a corrected version. Keep the tone {{STYLE}}.' },
+  { id: 't3', title: 'Resume Improver', category: 'Career', description: 'Sharpen resume bullets for a target role.', body: 'Improve these resume bullets for a {{ROLE}} position:\n\n{{BULLETS}}\n\nStart each bullet with an action verb, add measurable results where possible, and keep each under 20 words.' },
+  { id: 't4', title: 'YouTube Idea Generator', category: 'Writing', description: 'Brainstorm video ideas for a niche.', body: 'Suggest {{COUNT}} YouTube video ideas about {{NICHE}} for {{AUDIENCE}}. For each, give a title, a hook for the first 10 seconds, and a thumbnail concept. Style: {{STYLE}}.' },
+  { id: 't5', title: 'Research Summarizer', category: 'AI', description: 'Summarize papers into clear sections.', body: 'Summarize the following text for a {{AUDIENCE}}:\n\n{{TEXT}}\n\nUse these sections: Problem, Method, Results, Limitations. Keep the whole summary under {{WORDS}} words.' },
+]
 
-function cleanTopic(text: string) {
-  let topic = text.trim();
-
-  topic = topic
-    .replace(
-      /^(please\s+)?(can you\s+)?(could you\s+)?/i,
-      ""
-    )
-    .replace(
-      /^(explain|tell me about|teach me|describe)\s+/i,
-      ""
-    )
-    .replace(/[?.!]+$/, "")
-    .trim();
-
-  if (!topic) {
-    return "the requested topic";
-  }
-
-  return topic.charAt(0).toUpperCase() + topic.slice(1);
+function loadPrompts(): Prompt[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(KEY) || 'null')
+    if (Array.isArray(raw) && raw.every(p => p && typeof p.id === 'string' && typeof p.title === 'string' && typeof p.content === 'string' && CATS.includes(p.category) && Array.isArray(p.tags))) {
+      return raw.map((p: Prompt) => ({ ...p, tags: p.tags.map(String), fav: p.fav === true }))
+    }
+  } catch { /* malformed data: use defaults */ }
+  return DEFAULTS
+}
+function readStore(key: string, fallback: string): string {
+  try { return localStorage.getItem(key) || fallback } catch { return fallback }
+}
+function writeStore(key: string, value: string) {
+  try { localStorage.setItem(key, value) } catch { /* storage unavailable */ }
 }
 
-/*
-  Local Prompt Intelligence
+// ---------- Local rule-based analysis ----------
+interface Dim { name: string; score: number; note: string; tip: string }
+interface Rule { name: string; re: string; weight: number; base: (words: number) => number; good: string; bad: string; tip: string }
+const STRONG = 70, WEAK = 50
+const RULES: Rule[] = [
+  { name: 'Goal Clarity', re: '\\b(explain|write|generate|create|analy[sz]e|summari[sz]e|review|improve|list|compare|build|design|draft|plan|teach|describe|suggest|rewrite|translate)\\b', weight: 55, base: w => Math.min(45, w * 4), good: 'Your prompt clearly describes the desired task.', bad: 'The task is vague. Start with a clear action verb and a specific subject.', tip: 'State the exact task with an action verb' },
+  { name: 'Context', re: "\\b(because|background|context|currently|working on|project|so that|in order to|i am|i'm|my)\\b", weight: 30, base: w => Math.min(40, w * 1.5), good: 'Useful background is provided.', bad: 'Needs more context about the situation or purpose.', tip: 'Add background: why you need this and what you already know' },
+  { name: 'Audience', re: '\\b(beginner|student|expert|audience|for an? |kids?|child|professional|manager|developer|recruiter|teacher|reader|non-technical|simple terms)\\b', weight: 50, base: () => 0, good: 'The target audience is clear.', bad: 'Needs more context about the target audience.', tip: 'Specify who the response is for' },
+  { name: 'Output Definition', re: '\\b(bullet|list|table|steps?|format|json|paragraphs?|summary|words|sections?|outline|code|headings?|markdown)\\b', weight: 40, base: () => 0, good: 'The expected output format is defined.', bad: 'The desired format of the answer is not defined.', tip: 'Define the desired format, such as bullets, a table or sections' },
+  { name: 'Constraints', re: "\\b(must|only|avoid|don't|do not|without|limit|at most|at least|maximum|under|exactly|no more than|within|tone)\\b", weight: 35, base: () => 0, good: 'Helpful limits guide the response.', bad: 'No constraints such as length, tone or things to avoid.', tip: 'Add relevant constraints like length, tone or exclusions' },
+  { name: 'Examples', re: '\\b(example|examples|e\\.g\\.|for instance|such as|sample|like this)\\b', weight: 50, base: () => 0, good: 'Examples are requested or provided.', bad: 'No examples are requested or provided.', tip: 'Include an example when useful' },
+]
 
-  This creates a genuinely improved, structured prompt
-  without requiring an API key or internet connection.
-*/
-function generateImprovedPrompt(input: string) {
-  const original = input.trim();
-  const topic = cleanTopic(original);
-  const lower = original.toLowerCase();
-
-  if (
-    lower.includes("explain") ||
-    lower.includes("learn") ||
-    lower.includes("what is") ||
-    lower.includes("teach")
-  ) {
-    return `You are an expert educator who specializes in explaining complex concepts to beginners.
-
-TASK
-Explain "${topic}" in a way that is easy to understand, memorable, and practically useful.
-
-AUDIENCE
-Assume the reader has little or no prior knowledge of the topic.
-
-INSTRUCTIONS
-1. Start with a simple one-paragraph definition.
-2. Explain the core idea using plain, beginner-friendly language.
-3. Use 2–3 intuitive real-world analogies.
-4. Break the concept into its most important components.
-5. Give practical, real-world examples.
-6. Explain how the concept works step by step.
-7. Mention common misconceptions or mistakes beginners make.
-8. Gradually introduce important technical terminology and define each term.
-9. Avoid unnecessary jargon and advanced mathematics unless it is essential.
-10. Clearly distinguish closely related concepts when relevant.
-
-OUTPUT FORMAT
-Use clear headings, short paragraphs, bullet points, and examples.
-
-Finish with:
-• A simple 5-point recap
-• 5 questions to test my understanding
-• One practical example or mini-exercise
-
-QUALITY REQUIREMENT
-The explanation should feel like a patient expert teaching a curious beginner. Prioritize clarity, accuracy, intuition, and practical understanding over unnecessary complexity.`;
-  }
-
-  if (
-    lower.includes("code") ||
-    lower.includes("program") ||
-    lower.includes("debug") ||
-    lower.includes("function")
-  ) {
-    return `Act as an experienced software engineer and patient programming mentor.
-
-TASK
-Help me with the following programming request:
-
-"${original}"
-
-GOAL
-Provide a correct, understandable, and practical solution rather than only giving code.
-
-INSTRUCTIONS
-1. First identify what the problem is asking.
-2. Explain the approach before writing the solution.
-3. Break the solution into logical steps.
-4. Provide clean and readable code.
-5. Explain the important parts of the code.
-6. Mention edge cases that should be considered.
-7. Analyze time and space complexity when applicable.
-8. If there is a common mistake, point it out.
-9. If multiple approaches exist, briefly compare them and recommend the most suitable one.
-
-OUTPUT FORMAT
-Use these sections:
-
-1. Understanding the Problem
-2. Approach
-3. Code
-4. Explanation
-5. Edge Cases
-6. Complexity
-7. Common Mistakes
-
-QUALITY REQUIREMENT
-Prioritize correctness, readability, maintainability, and beginner-friendly explanations.`;
-  }
-
-  if (
-    lower.includes("write") ||
-    lower.includes("rewrite") ||
-    lower.includes("email") ||
-    lower.includes("article") ||
-    lower.includes("content")
-  ) {
-    return `Act as an expert professional writer and editor.
-
-TASK
-Create or improve the following content request:
-
-"${original}"
-
-GOAL
-Produce polished content that is clear, natural, engaging, and appropriate for the intended audience.
-
-INSTRUCTIONS
-1. Preserve the original meaning and objective.
-2. Improve clarity and structure.
-3. Remove unnecessary repetition.
-4. Use natural and professional language.
-5. Maintain an appropriate tone.
-6. Make the opening engaging.
-7. Keep the writing concise without removing important information.
-8. Use headings or bullet points when they improve readability.
-
-OUTPUT
-Provide the final polished version first.
-
-Then provide:
-• Key improvements made
-• Suggested alternative wording where useful
-
-QUALITY REQUIREMENT
-The result should sound human, confident, clear, and purposeful rather than robotic or overly formal.`;
-  }
-
-  if (
-    lower.includes("roadmap") ||
-    lower.includes("learn") ||
-    lower.includes("study")
-  ) {
-    return `Act as an experienced mentor and curriculum designer.
-
-TASK
-Create a practical learning plan based on this request:
-
-"${original}"
-
-GOAL
-Help a beginner progress from their current level to a strong practical understanding.
-
-INSTRUCTIONS
-1. Identify the prerequisites.
-2. Divide the journey into logical stages.
-3. Explain what to learn in each stage.
-4. Prioritize the most important concepts.
-5. Include practical exercises.
-6. Include beginner-friendly projects.
-7. Explain how to measure progress.
-8. Mention common mistakes and what to avoid.
-9. Recommend a realistic weekly schedule.
-10. Clearly distinguish essential topics from optional topics.
-
-OUTPUT FORMAT
-Provide:
-
-1. Starting Point
-2. Learning Stages
-3. Weekly Plan
-4. Practice Tasks
-5. Projects
-6. Progress Checklist
-7. Common Mistakes
-8. Next Steps
-
-QUALITY REQUIREMENT
-Make the roadmap realistic, structured, practical, and achievable rather than overwhelming.`;
-  }
-
-  return `Act as an expert assistant specializing in clear, accurate, and useful responses.
-
-USER REQUEST
-"${original}"
-
-OBJECTIVE
-Transform this request into a high-quality task that produces a specific, useful, and actionable result.
-
-INSTRUCTIONS
-1. Understand the user's actual goal.
-2. Clarify the required context.
-3. Define the expected outcome.
-4. Break complex requirements into logical steps.
-5. Specify useful constraints.
-6. Use precise and unambiguous language.
-7. Include relevant examples where they improve understanding.
-8. Avoid unnecessary complexity.
-
-OUTPUT FORMAT
-Structure the response with clear headings and concise explanations.
-
-QUALITY REQUIREMENT
-Prioritize accuracy, relevance, clarity, practical usefulness, and a result that directly addresses the user's goal.`;
+function analyze(text: string): { overall: number; dims: Dim[] } {
+  const words = text.trim().split(/\s+/).filter(Boolean).length
+  const dims = RULES.map(r => {
+    const hits = (text.match(new RegExp(r.re, 'gi')) || []).length
+    const score = Math.round(Math.min(100, r.base(words) + hits * r.weight))
+    return { name: r.name, score, note: score >= 60 ? r.good : r.bad, tip: r.tip }
+  })
+  return { overall: Math.round(dims.reduce((sum, d) => sum + d.score, 0) / dims.length), dims }
 }
 
-function App() {
-  const [prompts, setPrompts] = useState<Prompt[]>(initialPrompts);
+function improve(text: string): { issues: string[]; result: string } {
+  const { dims } = analyze(text)
+  const isWeak = (name: string) => (dims.find(d => d.name === name)?.score ?? 0) < WEAK
+  let base = text.trim().replace(/[.?!\s]+$/, '')
+  if (isWeak('Goal Clarity')) base = 'Explain ' + base.charAt(0).toLowerCase() + base.slice(1)
+  base = base.charAt(0).toUpperCase() + base.slice(1)
+  const parts = [base + (isWeak('Audience') ? ' in simple terms for a beginner student' : '') + '.']
+  if (isWeak('Context')) parts.push('Assume I am new to this topic and want to understand the core idea first.')
+  if (isWeak('Output Definition')) parts.push('Define the core concept, explain how it works at a high level, and summarize the key ideas in bullet points.')
+  if (isWeak('Examples')) parts.push('Provide 2 practical real-world examples.')
+  if (isWeak('Constraints')) parts.push('Keep it under 300 words and avoid unnecessary jargon.')
+  return { issues: dims.filter(d => d.score < WEAK).map(d => d.tip), result: parts.join(' ') }
+}
 
-  const [activeFilter, setActiveFilter] = useState<
-    "All" | "Favorites" | Category
-  >("All");
-
-  const [search, setSearch] = useState("");
-  const [selectedPrompt, setSelectedPrompt] =
-    useState<Prompt | null>(null);
-
-  const [showCreate, setShowCreate] = useState(false);
-  const [showImprover, setShowImprover] = useState(false);
-
-  const [copiedId, setCopiedId] = useState<number | null>(
-    null
-  );
-
-  const [copiedImproved, setCopiedImproved] =
-    useState(false);
-
-  const [darkMode, setDarkMode] = useState(() => {
-    return (
-      localStorage.getItem("prompt-by-niti-theme") ===
-      "dark"
-    );
-  });
-
-  const [newPrompt, setNewPrompt] = useState({
-    title: "",
-    category: "Study" as Category,
-    description: "",
-    prompt: "",
-    tags: "",
-  });
-
-  const [improveText, setImproveText] = useState("");
-  const [improvedText, setImprovedText] = useState("");
-
-  const categories: Category[] = [
-    "Study",
-    "Coding",
-    "Writing",
-    "AI",
-    "Career",
-  ];
-
-  const toggleTheme = () => {
-    setDarkMode((previous) => {
-      const next = !previous;
-
-      localStorage.setItem(
-        "prompt-by-niti-theme",
-        next ? "dark" : "light"
-      );
-
-      return next;
-    });
-  };
-
-  const filteredPrompts = useMemo(() => {
-    return prompts.filter((item) => {
-      const matchesFilter =
-        activeFilter === "All"
-          ? true
-          : activeFilter === "Favorites"
-          ? item.favorite
-          : item.category === activeFilter;
-
-      const query = search.toLowerCase().trim();
-
-      const matchesSearch =
-        !query ||
-        item.title.toLowerCase().includes(query) ||
-        item.description.toLowerCase().includes(query) ||
-        item.prompt.toLowerCase().includes(query) ||
-        item.category.toLowerCase().includes(query) ||
-        item.tags.some((tag) =>
-          tag.toLowerCase().includes(query)
-        );
-
-      return matchesFilter && matchesSearch;
-    });
-  }, [prompts, activeFilter, search]);
-
-  const favoriteCount = prompts.filter(
-    (item) => item.favorite
-  ).length;
-
-  const toggleFavorite = (id: number) => {
-    setPrompts((current) =>
-      current.map((item) =>
-        item.id === id
-          ? { ...item, favorite: !item.favorite }
-          : item
-      )
-    );
-
-    setSelectedPrompt((current) =>
-      current && current.id === id
-        ? { ...current, favorite: !current.favorite }
-        : current
-    );
-  };
-
-  const copyPrompt = async (prompt: Prompt) => {
-    try {
-      await navigator.clipboard.writeText(prompt.prompt);
-
-      setCopiedId(prompt.id);
-
-      setTimeout(() => {
-        setCopiedId(null);
-      }, 1600);
-    } catch {
-      // Clipboard unavailable.
+// ---------- UI primitives ----------
+function ModalShell({ title, subtitle, onClose, children, wide }: { title: string; subtitle?: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const closeRef = useRef(onClose)
+  useEffect(() => { closeRef.current = onClose })
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { closeRef.current(); return }
+      if (e.key !== 'Tab' || !ref.current) return
+      const items = ref.current.querySelectorAll<HTMLElement>('button:not(:disabled),input,textarea,select,[href]')
+      if (!items.length) return
+      const first = items[0], last = items[items.length - 1]
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
     }
-  };
+    document.addEventListener('keydown', onKey)
+    ref.current?.focus()
+    return () => { document.removeEventListener('keydown', onKey); previous?.focus?.() }
+  }, [])
+  return (
+    <div className="overlay" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className={'modal' + (wide ? ' wide' : '')} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={ref}>
+        <header className="modal-head">
+          <div><h2>{title}</h2>{subtitle && <p className="mute">{subtitle}</p>}</div>
+          <button className="icon-btn" aria-label="Close dialog" title="Close" onClick={onClose}><X size={18} /></button>
+        </header>
+        <div className="modal-body">{children}</div>
+      </div>
+    </div>
+  )
+}
 
-  const createPrompt = () => {
-    if (
-      !newPrompt.title.trim() ||
-      !newPrompt.prompt.trim()
-    ) {
-      return;
+function Ring({ score, size = 132 }: { score: number; size?: number }) {
+  const r = 52, c = 2 * Math.PI * r
+  return (
+    <div className="ring" style={{ width: size, height: size }} role="img" aria-label={`Score ${score} out of 100`}>
+      <svg viewBox="0 0 120 120" aria-hidden="true">
+        <circle cx="60" cy="60" r={r} className="ring-bg" />
+        <circle cx="60" cy="60" r={r} className="ring-fg" strokeDasharray={c} strokeDashoffset={c * (1 - score / 100)} transform="rotate(-90 60 60)" />
+      </svg>
+      <div className="ring-num"><strong>{score}</strong><span>/ 100</span></div>
+    </div>
+  )
+}
+
+function Empty({ title, text, action }: { title: string; text: string; action?: ReactNode }) {
+  return <div className="empty"><div className="empty-icon"><Sparkles size={26} /></div><h3>{title}</h3><p className="mute">{text}</p>{action}</div>
+}
+
+function PromptCard({ p, onFav, onCopy, onOpen }: { p: Prompt; onFav: () => void; onCopy: () => void; onOpen: () => void }) {
+  const Icon = ICONS[p.category]
+  return (
+    <article className="card prompt-card">
+      <div className="card-top">
+        <span className={'badge ' + TONE[p.category]}><Icon size={13} /> {p.category}</span>
+        <button className={'icon-btn' + (p.fav ? ' on' : '')} aria-label={p.fav ? `Remove ${p.title} from favorites` : `Add ${p.title} to favorites`} aria-pressed={p.fav} title={p.fav ? 'Unfavorite' : 'Favorite'} onClick={onFav}>
+          <Star size={17} fill={p.fav ? 'currentColor' : 'none'} />
+        </button>
+      </div>
+      <h3>{p.title}</h3>
+      <p className="preview mute">{p.content}</p>
+      <p className="tags">{p.tags.slice(0, 3).join(' · ')}</p>
+      <div className="card-actions">
+        <button className="btn ghost small" onClick={onCopy}><Copy size={14} /> Copy</button>
+        <button className="btn link small" onClick={onOpen} aria-label={'Open ' + p.title}>Open <ArrowRight size={14} /></button>
+      </div>
+    </article>
+  )
+}
+
+// ---------- Modals ----------
+function DnaModal({ initial, onClose }: { initial: string; onClose: () => void }) {
+  const [text, setText] = useState(initial)
+  const [res, setRes] = useState<ReturnType<typeof analyze> | null>(() => (initial.trim() ? analyze(initial) : null))
+  const strengths = res ? res.dims.filter(d => d.score >= STRONG) : []
+  const weak = res ? res.dims.filter(d => d.score < WEAK) : []
+  return (
+    <ModalShell title="Prompt DNA" subtitle="Understand what makes your prompt strong." onClose={onClose} wide>
+      <label className="field"><span>Your prompt</span>
+        <textarea rows={5} value={text} placeholder="Paste or type a prompt to analyze…" onChange={e => { setText(e.target.value); setRes(null) }} />
+      </label>
+      <p className="mute small-text">Local Prompt Quality Analysis. Rule-based and run in your browser; no AI service is used.</p>
+      {res && (
+        <div className="analysis">
+          <div className="score-head">
+            <Ring score={res.overall} />
+            <div>
+              <h3>Prompt Quality</h3>
+              <p className="mute">{res.overall >= STRONG ? 'A strong prompt. Small tweaks can make it better.' : res.overall >= WEAK ? 'A decent start with clear room to improve.' : 'This prompt needs more detail to give reliable answers.'}</p>
+            </div>
+          </div>
+          <div className="dims">
+            {res.dims.map(d => (
+              <div key={d.name} className="dim">
+                <div className="dim-top"><b>{d.name}</b><span>{d.score}/100</span></div>
+                <div className="bar"><i style={{ width: d.score + '%' }} /></div>
+                <p className="mute small-text">{d.note}</p>
+              </div>
+            ))}
+          </div>
+          <div className="insights">
+            <div className="insight good"><h4>Strengths</h4>{strengths.length ? <ul>{strengths.map(d => <li key={d.name}>{d.name}: {d.note}</li>)}</ul> : <p className="mute">No standout strengths yet.</p>}</div>
+            <div className="insight bad"><h4>Weak areas</h4>{weak.length ? <ul>{weak.map(d => <li key={d.name}>{d.name}: {d.note}</li>)}</ul> : <p className="mute">No weak areas found.</p>}</div>
+          </div>
+          <div className="insight sug"><h4>Suggestions</h4>{weak.length ? <ul>{weak.map(d => <li key={d.name}>{d.tip}</li>)}</ul> : <p className="mute">Test the prompt with your AI tool and refine from the results.</p>}</div>
+        </div>
+      )}
+      <footer className="modal-foot">
+        {res ? (<>
+          <button className="btn ghost" onClick={() => { setText(''); setRes(null) }}>Analyze Another</button>
+          <button className="btn ghost" onClick={() => setRes(analyze(text))}>Recalculate</button>
+          <button className="btn primary" onClick={onClose}>Close</button>
+        </>) : (<>
+          <button className="btn ghost" onClick={onClose}>Close</button>
+          <button className="btn primary" disabled={!text.trim()} onClick={() => setRes(analyze(text))}><Sparkles size={16} /> Analyze Prompt</button>
+        </>)}
+      </footer>
+    </ModalShell>
+  )
+}
+
+function ImproverModal({ initial, onClose, onCopy, onDna }: { initial: string; onClose: () => void; onCopy: (t: string) => void; onDna: (t: string) => void }) {
+  const [text, setText] = useState(initial)
+  const [out, setOut] = useState<ReturnType<typeof improve> | null>(() => (initial.trim() ? improve(initial) : null))
+  return (
+    <ModalShell title="Prompt Improver" subtitle="Local rule-based improvement" onClose={onClose} wide>
+      <label className="field"><span>Original prompt</span>
+        <textarea rows={3} value={text} placeholder="e.g. explain machine learning" onChange={e => { setText(e.target.value); setOut(null) }} />
+      </label>
+      {out && (
+        <div className="analysis">
+          <h4>What could be improved</h4>
+          {out.issues.length ? <ul>{out.issues.map(i => <li key={i}>{i}</li>)}</ul> : <p className="mute">Your prompt already covers the basics. The version below adds polish.</p>}
+          <h4>Improved prompt</h4>
+          <div className="improved">{out.result}</div>
+        </div>
+      )}
+      <footer className="modal-foot">
+        <button className="btn ghost" onClick={onClose}>Close</button>
+        {out ? (<>
+          <button className="btn ghost" onClick={() => onDna(out.result)}>Analyze with Prompt DNA</button>
+          <button className="btn primary" onClick={() => onCopy(out.result)}><Copy size={16} /> Copy Improved Prompt</button>
+        </>) : <button className="btn primary" disabled={!text.trim()} onClick={() => setOut(improve(text))}><Sparkles size={16} /> Improve Prompt</button>}
+      </footer>
+    </ModalShell>
+  )
+}
+
+function NewModal({ onClose, onCreate }: { onClose: () => void; onCreate: (p: Omit<Prompt, 'id' | 'fav'>) => void }) {
+  const [title, setTitle] = useState('')
+  const [content, setContent] = useState('')
+  const [category, setCategory] = useState<Cat>('Study')
+  const [tags, setTags] = useState('')
+  const [err, setErr] = useState<{ title?: string; content?: string }>({})
+  const submit = () => {
+    const e: { title?: string; content?: string } = {}
+    if (!title.trim()) e.title = 'Give your prompt a title.'
+    if (!content.trim()) e.content = 'Write the prompt text.'
+    setErr(e)
+    if (e.title || e.content) return
+    onCreate({ title: title.trim(), content: content.trim(), category, tags: tags.split(',').map(t => t.trim().replace(/^#/, '')).filter(Boolean) })
+  }
+  return (
+    <ModalShell title="New prompt" subtitle="Save a prompt to your library." onClose={onClose}>
+      <label className="field"><span>Title</span><input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Summarize lecture notes" aria-invalid={!!err.title} />{err.title && <em className="err">{err.title}</em>}</label>
+      <label className="field"><span>Prompt</span><textarea rows={5} value={content} onChange={e => setContent(e.target.value)} placeholder="Write the full prompt here" aria-invalid={!!err.content} />{err.content && <em className="err">{err.content}</em>}</label>
+      <div className="two">
+        <label className="field"><span>Category</span><select value={category} onChange={e => setCategory(e.target.value as Cat)}>{CATS.map(c => <option key={c}>{c}</option>)}</select></label>
+        <label className="field"><span>Tags (comma separated)</span><input value={tags} onChange={e => setTags(e.target.value)} placeholder="python, notes" /></label>
+      </div>
+      <footer className="modal-foot"><button className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary" onClick={submit}>Create Prompt</button></footer>
+    </ModalShell>
+  )
+}
+
+function TemplateModal({ t, onClose, onCopy, onSave }: { t: Template; onClose: () => void; onCopy: (s: string) => void; onSave: (s: string) => void }) {
+  const vars = useMemo(() => Array.from(new Set(Array.from(t.body.matchAll(/\{\{([A-Z_]+)\}\}/g), m => m[1]))), [t])
+  const [vals, setVals] = useState<Record<string, string>>({})
+  const filled = t.body.replace(/\{\{([A-Z_]+)\}\}/g, (m, k: string) => (vals[k] || '').trim() || m)
+  const missing = vars.filter(v => !(vals[v] || '').trim()).length
+  return (
+    <ModalShell title={t.title} subtitle="Fill in the variables to build your prompt." onClose={onClose} wide>
+      <div className="two">
+        {vars.map(v => (
+          <label key={v} className="field"><span>{v.charAt(0) + v.slice(1).toLowerCase().replace(/_/g, ' ')}</span>
+            <input value={vals[v] || ''} onChange={e => setVals({ ...vals, [v]: e.target.value })} />
+          </label>
+        ))}
+      </div>
+      <h4>Preview</h4>
+      <pre className="improved">{filled}</pre>
+      {missing > 0 && <p className="mute small-text">{missing} variable{missing > 1 ? 's' : ''} still empty. They stay as {'{{PLACEHOLDERS}}'} in the prompt.</p>}
+      <footer className="modal-foot">
+        <button className="btn ghost" onClick={() => onCopy(filled)}><Copy size={16} /> Copy</button>
+        <button className="btn primary" onClick={() => onSave(filled)}>Save to library</button>
+      </footer>
+    </ModalShell>
+  )
+}
+
+// ---------- App ----------
+export default function App() {
+  const [prompts, setPrompts] = useState<Prompt[]>(loadPrompts)
+  const [view, setView] = useState<View>('all')
+  const [q, setQ] = useState('')
+  const [modal, setModal] = useState<Modal>(null)
+  const [drawer, setDrawer] = useState(false)
+  const [dark, setDark] = useState(() => readStore(THEME_KEY, 'light') === 'dark')
+  const [name, setName] = useState(() => readStore(NAME_KEY, 'Guest'))
+  const [draftName, setDraftName] = useState('')
+  const [toast, setToast] = useState<ToastState | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const toastId = useRef(0)
+
+  useEffect(() => { writeStore(KEY, JSON.stringify(prompts)) }, [prompts])
+  useEffect(() => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; writeStore(THEME_KEY, dark ? 'dark' : 'light') }, [dark])
+  useEffect(() => { writeStore(NAME_KEY, name) }, [name])
+
+  const showToast = useCallback((msg: string) => { toastId.current += 1; setToast({ id: toastId.current, msg, leaving: false }) }, [])
+  useEffect(() => {
+    if (!toast) return
+    const id = setTimeout(() => setToast(t => (t ? (t.leaving ? null : { ...t, leaving: true }) : null)), toast.leaving ? TOAST_EXIT_MS : TOAST_MS)
+    return () => clearTimeout(id)
+  }, [toast])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchRef.current?.focus() }
+      if (e.key === 'Escape') setDrawer(false)
     }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
 
-    const created: Prompt = {
-      id: Date.now(),
-      title: newPrompt.title.trim(),
-      category: newPrompt.category,
-      description:
-        newPrompt.description.trim() ||
-        "A useful prompt for your AI workflow.",
-      prompt: newPrompt.prompt.trim(),
-      tags: newPrompt.tags
-        .split(",")
-        .map((tag) => tag.trim())
-        .filter(Boolean)
-        .slice(0, 4),
-      favorite: false,
-    };
+  const copy = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); showToast('Copied!') } catch { showToast('Copy failed. Select the text and copy it manually.') }
+  }
+  const toggleFav = (id: string) => setPrompts(ps => ps.map(p => (p.id === id ? { ...p, fav: !p.fav } : p)))
+  const addPrompt = (p: Omit<Prompt, 'id' | 'fav'>) => {
+    setPrompts(ps => [{ ...p, id: 'p' + Date.now(), fav: false }, ...ps])
+    setView('all'); setQ(''); setModal(null); showToast('Prompt created')
+  }
+  const go = (v: View) => { setView(v); setDrawer(false) }
+  const openAccount = () => { setDraftName(name); setModal({ t: 'account' }); setDrawer(false) }
+  const close = () => setModal(null)
 
-    setPrompts((current) => [created, ...current]);
+  const s = q.trim().toLowerCase()
+  const list = useMemo(() => prompts.filter(p => (view === 'all' || view === 'templates' || (view === 'fav' ? p.fav : p.category === view)) && (!s || [p.title, p.content, p.category, ...p.tags].join(' ').toLowerCase().includes(s))), [prompts, view, s])
+  const templates = TEMPLATES.filter(t => !s || (t.title + ' ' + t.description + ' ' + t.category).toLowerCase().includes(s))
+  const count = (c: Cat) => prompts.filter(p => p.category === c).length
+  const favCount = prompts.filter(p => p.fav).length
+  const detail = modal && modal.t === 'detail' ? prompts.find(p => p.id === modal.id) : undefined
+  const template = modal && modal.t === 'tpl' ? TEMPLATES.find(t => t.id === modal.id) : undefined
+  const pageTitle = view === 'all' ? 'All Prompts' : view === 'fav' ? 'Favorites' : view === 'templates' ? 'Templates' : view
 
-    setNewPrompt({
-      title: "",
-      category: "Study",
-      description: "",
-      prompt: "",
-      tags: "",
-    });
-
-    setShowCreate(false);
-  };
-
-  const improvePrompt = () => {
-    if (!improveText.trim()) {
-      return;
-    }
-
-    const result = generateImprovedPrompt(
-      improveText
-    );
-
-    setImprovedText(result);
-    setCopiedImproved(false);
-  };
-
-  const copyImprovedPrompt = async () => {
-    try {
-      await navigator.clipboard.writeText(
-        improvedText
-      );
-
-      setCopiedImproved(true);
-
-      setTimeout(() => {
-        setCopiedImproved(false);
-      }, 1600);
-    } catch {
-      // Clipboard unavailable.
-    }
-  };
+  const navItem = (v: View, label: string, Icon: LucideIcon, n?: number) => (
+    <button key={v} className={'nav-item' + (view === v ? ' active' : '')} aria-current={view === v ? 'page' : undefined} onClick={() => go(v)}>
+      <Icon size={17} /><span>{label}</span>{n !== undefined && <small>{n}</small>}
+    </button>
+  )
 
   return (
-    <div
-      className={`app ${
-        darkMode ? "dark-mode" : ""
-      }`}
-    >
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-logo">
-            <div className="logo-orbit" />
-            <div className="logo-p">P</div>
-            <div className="logo-n">N</div>
-            <div className="logo-sparkle">✦</div>
-            <div className="logo-dot" />
-          </div>
-
-          <div className="brand-text">
-            <div className="brand-name">
-              Prompt <span>by Niti</span>
-            </div>
-
-            <div className="brand-subtitle">
-              PROMPT STUDIO · 01
-            </div>
-          </div>
-        </div>
-
-        <div className="sidebar-section">
-          <div className="sidebar-label">
-            WORKSPACE
-          </div>
-
-          <button
-            className={`nav-item ${
-              activeFilter === "All" ? "active" : ""
-            }`}
-            onClick={() => setActiveFilter("All")}
-          >
-            <span className="nav-number">01</span>
-            <Grid2X2 size={17} />
-            <span>All Prompts</span>
-            <small>{prompts.length}</small>
-          </button>
-
-          <button
-            className={`nav-item ${
-              activeFilter === "Favorites"
-                ? "active"
-                : ""
-            }`}
-            onClick={() =>
-              setActiveFilter("Favorites")
-            }
-          >
-            <span className="nav-number">02</span>
-            <Heart size={17} />
-            <span>Favorites</span>
-            <small>{favoriteCount}</small>
-          </button>
-        </div>
-
-        <div className="sidebar-section">
-          <div className="sidebar-label">
-            COLLECTIONS
-          </div>
-
-          {categories.map((category, index) => {
-            const Icon = categoryIcons[category];
-
-            const count = prompts.filter(
-              (item) => item.category === category
-            ).length;
-
-            return (
-              <button
-                key={category}
-                className={`nav-item ${
-                  activeFilter === category
-                    ? "active"
-                    : ""
-                }`}
-                onClick={() =>
-                  setActiveFilter(category)
-                }
-              >
-                <span className="nav-number">
-                  {String(index + 3).padStart(2, "0")}
-                </span>
-
-                <Icon size={17} />
-
-                <span>{category}</span>
-
-                <small>{count}</small>
-              </button>
-            );
-          })}
-        </div>
-
-        <button
-          className="theme-toggle"
-          onClick={toggleTheme}
-        >
-          <span className="theme-icon">
-            {darkMode ? (
-              <Sun size={16} />
-            ) : (
-              <Moon size={16} />
-            )}
-          </span>
-
-          <span>
-            {darkMode
-              ? "Light mode"
-              : "Dark mode"}
-          </span>
-
-          <span className="theme-switch">
-            <span className="theme-switch-knob" />
-          </span>
-        </button>
-
-        <div className="sidebar-promo">
-          <Sparkles size={14} />
-
-          <div>
-            <strong>Better prompts.</strong>
-            <span>Better conversations.</span>
-          </div>
-        </div>
-
-        <div className="sidebar-footer">
-          PROMPT BY NITI / 01.0
+    <div className="app">
+      {drawer && <button className="backdrop" aria-label="Close menu" onClick={() => setDrawer(false)} />}
+      <aside className={'sidebar' + (drawer ? ' open' : '')} aria-label="Sidebar">
+        <div className="brand"><Logo /><b>Prompt by Niti</b></div>
+        <nav className="nav" aria-label="Main">
+          <p className="nav-label">Workspace</p>
+          {navItem('all', 'All Prompts', LayoutGrid, prompts.length)}
+          {navItem('fav', 'Favorites', Star, favCount)}
+          {navItem('templates', 'Templates', FileText, TEMPLATES.length)}
+          <p className="nav-label">Collections</p>
+          {CATS.map(c => navItem(c, c, ICONS[c], count(c)))}
+        </nav>
+        <div className="side-bottom">
+          <button className="nav-item" onClick={() => go('templates')}><FileText size={17} /><span>Prompt Templates</span></button>
+          <button className="nav-item" onClick={() => { setModal({ t: 'guide' }); setDrawer(false) }}><BookOpen size={17} /><span>Quick Guide</span></button>
+          <button className="nav-item" onClick={() => setDark(d => !d)}>{dark ? <Sun size={17} /> : <Moon size={17} />}<span>{dark ? 'Light theme' : 'Dark theme'}</span></button>
+          <button className="nav-item" onClick={openAccount}><span className="avatar">{name.charAt(0).toUpperCase()}</span><span>{name}</span></button>
         </div>
       </aside>
 
-      <main className="main-content">
-        <header className="topbar">
-          <div className="top-search">
-            <Search size={17} />
+      <main className="main">
+        <div className="topbar">
+          <button className="icon-btn menu-btn" aria-label="Open menu" title="Menu" onClick={() => setDrawer(true)}><Menu size={20} /></button>
+          <span className="page-title">{pageTitle}</span>
+          <label className="search"><Search size={17} />
+            <input ref={searchRef} aria-label="Search prompts" placeholder="Search title, content, category or tag" value={q} onChange={e => setQ(e.target.value)} />
+            <kbd>{IS_MAC ? '⌘ K' : 'Ctrl K'}</kbd>
+          </label>
+          <button className="btn primary" onClick={() => setModal({ t: 'new' })}><Plus size={16} /> New Prompt</button>
+          <button className="icon-btn round" aria-label="Account" title="Account" onClick={openAccount}><User size={18} /></button>
+        </div>
 
-            <input
-              value={search}
-              onChange={(event) =>
-                setSearch(event.target.value)
-              }
-              placeholder="Search prompts, tags, or collections..."
-            />
-
-            {search && (
-              <button
-                onClick={() => setSearch("")}
-              >
-                <X size={15} />
-              </button>
-            )}
-          </div>
-
-          <button
-            className="create-top-button"
-            onClick={() => setShowCreate(true)}
-          >
-            <Plus size={17} />
-            New Prompt
-          </button>
-        </header>
-
-        <section className="hero">
-          <div className="hero-copy">
-            <div className="eyebrow">
-              01 / PROMPT WORKSPACE
-            </div>
-
-            <h1 className="hero-title">
-              Your prompts,
-              <br />
-              <em>organized.</em>
-            </h1>
-
-            <p className="hero-description">
-              Save the prompts that work. Improve the
-              ones that don’t. Reuse them whenever you
-              need.
-            </p>
-
-            <div className="hero-actions">
-              <button
-                className="primary-button"
-                onClick={() =>
-                  setShowCreate(true)
-                }
-              >
-                <Plus size={18} />
-                Create Prompt
-              </button>
-
-              <button
-                className="secondary-button"
-                onClick={() =>
-                  setShowImprover(true)
-                }
-              >
-                <WandSparkles size={17} />
-                Improve a Prompt
-              </button>
-            </div>
-          </div>
-
-          <div className="hero-art">
-            <div className="magic-shape shape-one" />
-            <div className="magic-shape shape-two" />
-            <div className="magic-shape shape-three" />
-            <div className="magic-shape shape-four" />
-
-            <div className="idea-note">
-              <div className="idea-text">
-                Ideas today,
-                <br />
-                better results
-                <br />
-                <span>tomorrow.</span>
+        <div className="page" key={view}>
+          {view === 'all' && !s && (
+            <section className="hero">
+              <div className="hero-copy">
+                <h1>Your prompts, organized.</h1>
+                <p>Save the prompts that work. Improve the ones that don't. Reuse them whenever you need.</p>
+                <button className="btn ghost" onClick={() => setModal({ t: 'improve', text: '' })}>Improve a Prompt</button>
               </div>
-
-              <div className="idea-line">
-                <span />
-                <span />
-                <span />
+              <div className="dna-card">
+                <div className="dna-mascot" aria-hidden="true"><Mascot size={104} /></div>
+<span className="sticker s1" aria-hidden="true">✨</span>
+<span className="sticker s2" aria-hidden="true">🧬</span>
+<span className="sticker s3" aria-hidden="true">💡</span>
+<span className="badge lav">Prompt DNA</span>
+                <h2>Know why your prompt works.</h2>
+                <p>Analyze clarity, context, audience, output definition, constraints and examples.</p>
+                <div className="row wrap"><Ring score={72} size={88} /><button className="btn primary" onClick={() => setModal({ t: 'dna', text: '' })}>Analyze a Prompt</button></div>
               </div>
-            </div>
+            </section>
+          )}
 
-            <div className="sparkle sparkle-one">
-              ✦
-            </div>
-
-            <div className="sparkle sparkle-two">
-              ✦
-            </div>
-
-            <div className="sparkle sparkle-three">
-              ✧
-            </div>
-
-            <div className="saved-card">
-              <strong>
-                {String(prompts.length).padStart(
-                  2,
-                  "0"
-                )}
-              </strong>
-
-              <span>SAVED PROMPTS</span>
-
-              <div />
-
-              <p>
-                A small library of useful
-                instructions.
-              </p>
-            </div>
-          </div>
-        </section>
-
-        <section className="collections-section">
-          <div className="section-heading">
-            <div>
-              <div className="eyebrow">
-                02 / COLLECTIONS
-              </div>
-
-              <h2>
-                Explore your library.
-              </h2>
-            </div>
-
-            <button
-              onClick={() =>
-                setActiveFilter("All")
-              }
-            >
-              View all
-              <ArrowUpRight size={15} />
-            </button>
-          </div>
-
-          <div className="collections-grid">
-            {categories.map((category) => {
-              const Icon =
-                categoryIcons[category];
-
-              const count = prompts.filter(
-                (item) =>
-                  item.category === category
-              ).length;
-
-              return (
-                <button
-                  key={category}
-                  className={`collection-card collection-${category.toLowerCase()}`}
-                  onClick={() =>
-                    setActiveFilter(category)
-                  }
-                >
-                  <div className="collection-icon">
-                    <Icon size={20} />
-                  </div>
-
-                  <div className="collection-bottom">
-                    <div>
-                      <h3>{category}</h3>
-                      <span>
-                        {count} prompts
-                      </span>
-                    </div>
-
-                    <ArrowUpRight size={18} />
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="library-section">
-          <div className="section-heading library-heading">
-            <div>
-              <div className="eyebrow">
-                03 / PROMPT LIBRARY
-              </div>
-
-              <h2>
-                {activeFilter === "All"
-                  ? "Your prompt library."
-                  : activeFilter ===
-                    "Favorites"
-                  ? "Your favorites."
-                  : `${activeFilter} prompts.`}
-              </h2>
-            </div>
-
-            <span className="result-count">
-              {filteredPrompts.length} prompts
-            </span>
-          </div>
-
-          {filteredPrompts.length > 0 ? (
-            <div className="prompt-grid">
-              {filteredPrompts.map(
-                (prompt, index) => {
-                  const Icon =
-                    categoryIcons[
-                      prompt.category
-                    ];
-
-                  return (
-                    <article
-                      className="prompt-card"
-                      key={prompt.id}
-                      onClick={() =>
-                        setSelectedPrompt(
-                          prompt
-                        )
-                      }
-                      style={{
-                        animationDelay: `${
-                          index * 70
-                        }ms`,
-                      }}
-                    >
-                      <div className="prompt-card-top">
-                        <div className="category-badge">
-                          <Icon size={13} />
-                          {prompt.category}
-                        </div>
-
-                        <button
-                          className={`favorite-button ${
-                            prompt.favorite
-                              ? "favorite-active"
-                              : ""
-                          }`}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            toggleFavorite(
-                              prompt.id
-                            );
-                          }}
-                        >
-                          <Star
-                            size={19}
-                            fill={
-                              prompt.favorite
-                                ? "currentColor"
-                                : "none"
-                            }
-                          />
-                        </button>
-                      </div>
-
-                      <h3>{prompt.title}</h3>
-
-                      <p>
-                        {prompt.description}
-                      </p>
-
-                      <div className="tag-row">
-                        {prompt.tags.map(
-                          (tag) => (
-                            <span key={tag}>
-                              {tag}
-                            </span>
-                          )
-                        )}
-                      </div>
-
-                      <div className="prompt-card-bottom">
-                        <span>
-                          READY TO USE
-                        </span>
-
-                        <button
-                          className="copy-button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            copyPrompt(
-                              prompt
-                            );
-                          }}
-                        >
-                          {copiedId ===
-                          prompt.id ? (
-                            <>
-                              <Check size={16} />
-                              Copied
-                            </>
-                          ) : (
-                            <>
-                              <Copy size={16} />
-                              Copy
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </article>
-                  );
-                }
-              )}
-            </div>
-          ) : (
-            <div className="empty-state">
-              <Search size={28} />
-              <h3>
-                No prompts found
-              </h3>
-              <p>
-                Try another search or create a
-                new prompt.
-              </p>
+          {view !== 'templates' && (
+            <div className="filters" role="group" aria-label="Filter prompts">
+              {([['all', 'All', LayoutGrid, prompts.length], ['fav', 'Favorites', Star, favCount]] as [View, string, LucideIcon, number][]).concat(CATS.map(c => [c, c, ICONS[c], count(c)] as [View, string, LucideIcon, number])).map(([v, label, Icon, n]) => (
+                <button key={v} className={'pill' + (view === v ? ' active' : '')} aria-pressed={view === v} onClick={() => setView(v)}><Icon size={14} /> {label} <small>{n}</small></button>
+              ))}
             </div>
           )}
-        </section>
 
-        <section className="improver-banner">
-          <div className="improver-icon">
-            <WandSparkles size={24} />
-          </div>
+          <h2 className="section-title">{view === 'all' ? 'Your library' : view === 'templates' ? 'Templates' : pageTitle}</h2>
 
-          <div className="improver-copy">
-            <div className="eyebrow">
-              04 / PROMPT IMPROVER
-            </div>
-
-            <h2>
-              Make your prompts{" "}
-              <em>better.</em>
-            </h2>
-
-            <p>
-              Clearer instructions. Better context.
-              More useful AI responses.
-            </p>
-          </div>
-
-          <button
-            className="improve-button"
-            onClick={() =>
-              setShowImprover(true)
-            }
-          >
-            Improve a prompt
-            <ArrowUpRight size={17} />
-          </button>
-        </section>
-
-        <footer className="page-footer">
-          <span>PROMPT BY NITI</span>
-          <span>SAVE / IMPROVE / REUSE</span>
-          <span>2026</span>
-        </footer>
+          {view === 'templates' ? (
+            templates.length ? (
+              <div className="grid">{templates.map(t => (
+                <article key={t.id} className="card tpl-card">
+                  <span className={'badge ' + TONE[t.category]}>Template · {t.category}</span>
+                  <h3>{t.title}</h3>
+                  <p className="mute">{t.description}</p>
+                  <pre className="tpl-body">{t.body}</pre>
+                  <button className="btn primary small" onClick={() => setModal({ t: 'tpl', id: t.id })}>Use Template</button>
+                </article>
+              ))}</div>
+            ) : <Empty title="No templates found" text="Try a different search term." action={<button className="btn ghost" onClick={() => setQ('')}>Clear search</button>} />
+          ) : list.length ? (
+            <div className="grid">{list.map(p => <PromptCard key={p.id} p={p} onFav={() => toggleFav(p.id)} onCopy={() => copy(p.content)} onOpen={() => setModal({ t: 'detail', id: p.id })} />)}</div>
+          ) : s ? <Empty title="No prompts found" text="Check the spelling, try a broader keyword, or search by tag or category." action={<button className="btn ghost" onClick={() => setQ('')}>Clear search</button>} />
+            : view === 'fav' ? <Empty title="No favorites yet" text="Save your most useful prompts here so you can find them quickly." />
+            : prompts.length === 0 ? <Empty title="No prompts yet" text="Create your first prompt to start your library." action={<button className="btn primary" onClick={() => setModal({ t: 'new' })}>New Prompt</button>} />
+            : <Empty title={'No ' + view + ' prompts yet'} text="Create a prompt in this category and it will appear here." action={<button className="btn primary" onClick={() => setModal({ t: 'new' })}>New Prompt</button>} />}
+        </div>
       </main>
 
-      {selectedPrompt && (
-        <div
-          className="modal-backdrop"
-          onClick={() =>
-            setSelectedPrompt(null)
-          }
-        >
-          <div
-            className="detail-modal"
-            onClick={(event) =>
-              event.stopPropagation()
-            }
-          >
-            <button
-              className="modal-close"
-              onClick={() =>
-                setSelectedPrompt(null)
-              }
-            >
-              <X size={20} />
-            </button>
-
-            <div className="detail-category">
-              {selectedPrompt.category}
-            </div>
-
-            <h2>
-              {selectedPrompt.title}
-            </h2>
-
-            <p className="detail-description">
-              {selectedPrompt.description}
-            </p>
-
-            <div className="detail-label">
-              PROMPT
-            </div>
-
-            <div className="prompt-preview">
-              {selectedPrompt.prompt}
-            </div>
-
-            <div className="detail-actions">
-              <button
-                className="secondary-button"
-                onClick={() =>
-                  toggleFavorite(
-                    selectedPrompt.id
-                  )
-                }
-              >
-                <Star
-                  size={17}
-                  fill={
-                    selectedPrompt.favorite
-                      ? "currentColor"
-                      : "none"
-                  }
-                />
-
-                {selectedPrompt.favorite
-                  ? "Favorited"
-                  : "Favorite"}
-              </button>
-
-              <button
-                className="primary-button"
-                onClick={() =>
-                  copyPrompt(
-                    selectedPrompt
-                  )
-                }
-              >
-                {copiedId ===
-                selectedPrompt.id ? (
-                  <>
-                    <Check size={17} />
-                    Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy size={17} />
-                    Copy Prompt
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
+      {modal?.t === 'new' && <NewModal onClose={close} onCreate={addPrompt} />}
+      {modal?.t === 'improve' && <ImproverModal initial={modal.text} onClose={close} onCopy={copy} onDna={t => setModal({ t: 'dna', text: t })} />}
+      {modal?.t === 'dna' && <DnaModal initial={modal.text} onClose={close} />}
+      {detail && (
+        <ModalShell title={detail.title} onClose={close} wide>
+          <div className="row wrap"><span className={'badge ' + TONE[detail.category]}>{detail.category}</span><span className="tags">{detail.tags.join(' · ')}</span></div>
+          <pre className="improved">{detail.content}</pre>
+          <footer className="modal-foot">
+            <button className={'btn ghost' + (detail.fav ? ' on' : '')} aria-pressed={detail.fav} onClick={() => toggleFav(detail.id)}><Star size={16} fill={detail.fav ? 'currentColor' : 'none'} /> {detail.fav ? 'Favorited' : 'Favorite'}</button>
+            <button className="btn ghost" onClick={() => copy(detail.content)}><Copy size={16} /> Copy</button>
+            <button className="btn ghost" onClick={() => setModal({ t: 'improve', text: detail.content })}>Improve Prompt</button>
+            <button className="btn primary" onClick={() => setModal({ t: 'dna', text: detail.content })}>Analyze with Prompt DNA</button>
+          </footer>
+        </ModalShell>
       )}
-
-      {showCreate && (
-        <div
-          className="modal-backdrop"
-          onClick={() =>
-            setShowCreate(false)
-          }
-        >
-          <div
-            className="create-modal"
-            onClick={(event) =>
-              event.stopPropagation()
-            }
-          >
-            <button
-              className="modal-close"
-              onClick={() =>
-                setShowCreate(false)
-              }
-            >
-              <X size={20} />
-            </button>
-
-            <div className="modal-eyebrow">
-              CREATE
-            </div>
-
-            <h2>
-              Create a new prompt
-            </h2>
-
-            <p>
-              Save your idea, organize it, and
-              use it anytime.
-            </p>
-
-            <div className="form-grid">
-              <label>
-                Title
-
-                <input
-                  value={newPrompt.title}
-                  onChange={(event) =>
-                    setNewPrompt({
-                      ...newPrompt,
-                      title:
-                        event.target.value,
-                    })
-                  }
-                  placeholder="e.g. Explain a complex topic"
-                />
-              </label>
-
-              <label>
-                Category
-
-                <select
-                  value={
-                    newPrompt.category
-                  }
-                  onChange={(event) =>
-                    setNewPrompt({
-                      ...newPrompt,
-                      category:
-                        event.target
-                          .value as Category,
-                    })
-                  }
-                >
-                  {categories.map(
-                    (category) => (
-                      <option key={category}>
-                        {category}
-                      </option>
-                    )
-                  )}
-                </select>
-              </label>
-
-              <label>
-                Description
-
-                <input
-                  value={
-                    newPrompt.description
-                  }
-                  onChange={(event) =>
-                    setNewPrompt({
-                      ...newPrompt,
-                      description:
-                        event.target.value,
-                    })
-                  }
-                  placeholder="What is this prompt useful for?"
-                />
-              </label>
-
-              <label>
-                Tags
-
-                <input
-                  value={newPrompt.tags}
-                  onChange={(event) =>
-                    setNewPrompt({
-                      ...newPrompt,
-                      tags:
-                        event.target.value,
-                    })
-                  }
-                  placeholder="learning, beginner"
-                />
-              </label>
-
-              <label className="full-field">
-                Prompt
-
-                <textarea
-                  value={newPrompt.prompt}
-                  onChange={(event) =>
-                    setNewPrompt({
-                      ...newPrompt,
-                      prompt:
-                        event.target.value,
-                    })
-                  }
-                  placeholder="Write your prompt here..."
-                />
-              </label>
-            </div>
-
-            <div className="modal-actions">
-              <button
-                className="secondary-button"
-                onClick={() =>
-                  setShowCreate(false)
-                }
-              >
-                Cancel
-              </button>
-
-              <button
-                className="primary-button"
-                onClick={createPrompt}
-              >
-                <Plus size={17} />
-                Save Prompt
-              </button>
-            </div>
-          </div>
-        </div>
+      {template && (
+        <TemplateModal t={template} onClose={close} onCopy={copy} onSave={body => {
+          setPrompts(ps => [{ id: 'p' + Date.now(), title: template.title, content: body, category: template.category, tags: ['template'], fav: false }, ...ps])
+          setView('all'); setModal(null); showToast('Saved to your library')
+        }} />
       )}
-
-      {showImprover && (
-        <div
-          className="modal-backdrop"
-          onClick={() =>
-            setShowImprover(false)
-          }
-        >
-          <div
-            className="improver-modal"
-            onClick={(event) =>
-              event.stopPropagation()
-            }
-          >
-            <button
-              className="modal-close"
-              onClick={() =>
-                setShowImprover(false)
-              }
-            >
-              <X size={20} />
-            </button>
-
-            <div className="improver-modal-icon">
-              <WandSparkles size={25} />
-            </div>
-
-            <div className="modal-eyebrow">
-              AI TOOL
-            </div>
-
-            <h2>
-              Improve your prompt.
-            </h2>
-
-            <p>
-              Turn a rough idea into a clear,
-              specific, high-quality instruction.
-            </p>
-
-            <textarea
-              className="improver-input"
-              value={improveText}
-              onChange={(event) => {
-                setImproveText(
-                  event.target.value
-                );
-                setImprovedText("");
-              }}
-              placeholder="Try: explain machine learning"
-            />
-
-            <button
-              className="primary-button full-button"
-              onClick={improvePrompt}
-            >
-              <WandSparkles size={17} />
-              Improve Prompt
-            </button>
-
-            {improvedText && (
-              <div className="improved-result">
-                <div className="detail-label">
-                  IMPROVED PROMPT
-                </div>
-
-                <p>{improvedText}</p>
-
-                <button
-                  className="secondary-button"
-                  onClick={
-                    copyImprovedPrompt
-                  }
-                >
-                  {copiedImproved ? (
-                    <>
-                      <Check size={16} />
-                      Copied
-                    </>
-                  ) : (
-                    <>
-                      <Copy size={16} />
-                      Copy Improved Prompt
-                    </>
-                  )}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+      {modal?.t === 'account' && (
+        <ModalShell title="Demo account" subtitle="This is a local profile, not secure sign-in. Your name is stored only in this browser." onClose={close}>
+          <label className="field"><span>Display name</span><input value={draftName} maxLength={30} onChange={e => setDraftName(e.target.value)} /></label>
+          <footer className="modal-foot"><button className="btn ghost" onClick={close}>Cancel</button><button className="btn primary" onClick={() => { setName(draftName.trim() || 'Guest'); close(); showToast('Name updated') }}>Save name</button></footer>
+        </ModalShell>
       )}
+      {modal?.t === 'guide' && (
+        <ModalShell title="Quick guide" subtitle="Get the most from your library." onClose={close}>
+          <ol className="guide">
+            <li>Create or save a prompt with New Prompt.</li>
+            <li>Star the ones you reuse to find them under Favorites.</li>
+            <li>Use Prompt Improver to strengthen a vague prompt.</li>
+            <li>Run Prompt DNA to see which parts need work.</li>
+            <li>Start from a template when you want a proven structure.</li>
+          </ol>
+          <footer className="modal-foot"><button className="btn primary" onClick={close}>Got it</button></footer>
+        </ModalShell>
+      )}
+      {toast && <div className={'toast' + (toast.leaving ? ' leaving' : '')} role="status">{toast.msg}</div>}
     </div>
-  );
+  )
 }
-
-export default App;
