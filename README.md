@@ -1,4 +1,4 @@
-# Prompt by Niti
+# Prompt by Niti https://soumya-1code.github.io/prompt-by-niti/
 
 **Your prompts, organized. Your ideas, improved.**
 
